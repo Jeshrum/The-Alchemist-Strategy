@@ -1,0 +1,396 @@
+// =============================================================================
+// THE ALCHEMIST SNR — Multi-Timeframe Indicator
+// =============================================================================
+// Strategy: SNR + Story Line + Confirmation Entry
+// Markets : XAUUSD (Gold) primary | Works on forex majors + NAS100
+// Chart TF: Any (M15 or H1 recommended for entry)
+// HTF Logic: H4 zones, Daily/Weekly bias via request.security()
+// =============================================================================
+
+//@version=6
+indicator("The Alchemist SNR — MTF", overlay=true,
+     max_lines_count=200, max_boxes_count=200, max_labels_count=200)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var g_tf = "Timeframes"
+htf_entry   = input.timeframe("240",  "Entry HTF (H4 zones)",    group=g_tf)
+htf_daily   = input.timeframe("D",    "Daily (Story Line)",      group=g_tf)
+htf_weekly  = input.timeframe("W",    "Weekly (Story Line)",     group=g_tf)
+
+var g_snr = "SNR Levels"
+show_h4_zones   = input.bool(true,  "Show H4 SNR Zones",    group=g_snr)
+show_daily_snr  = input.bool(true,  "Show Daily SNR Levels", group=g_snr)
+show_weekly_snr = input.bool(true,  "Show Weekly SNR Level", group=g_snr)
+zone_extend     = input.int(20,     "Zone Extend (bars)",    group=g_snr, minval=5, maxval=100)
+
+var g_sess = "Sessions"
+show_sessions   = input.bool(true,  "Highlight Sessions",        group=g_sess)
+show_asia       = input.bool(true,  "Show Asia (No-Trade Zone)", group=g_sess)
+show_lkz        = input.bool(true,  "Show London Kill Zone",     group=g_sess)
+show_nykz       = input.bool(true,  "Show NY Kill Zone",         group=g_sess)
+
+var g_liq = "Session Liquidity"
+show_pdhl       = input.bool(true,  "Show Prev Day High/Low",    group=g_liq)
+show_pwhl       = input.bool(true,  "Show Prev Week High/Low",   group=g_liq)
+show_asian_hl   = input.bool(true,  "Show Asian Session H/L",    group=g_liq)
+
+var g_sig = "Signals"
+show_signals    = input.bool(true,  "Show Entry Signals",        group=g_sig)
+show_labels     = input.bool(true,  "Show Signal Labels",        group=g_sig)
+
+var g_risk = "Risk"
+sl_pips         = input.float(20.0, "Stop Loss (pips)",   group=g_risk, step=5.0)
+tp_r            = input.float(5.0,  "Take Profit (R)",    group=g_risk, step=0.5)
+pip_size        = input.float(0.1,  "Pip Size (0.1=Gold)", group=g_risk, step=0.01)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  COLOURS
+// ─────────────────────────────────────────────────────────────────────────────
+c_res       = color.new(#F23645, 0)
+c_sup       = color.new(#089981, 0)
+c_res_fill  = color.new(#F23645, 88)
+c_sup_fill  = color.new(#089981, 88)
+c_weekly_r  = color.new(#FF9800, 0)
+c_weekly_s  = color.new(#2196F3, 0)
+c_daily_r   = color.new(#F23645, 60)
+c_daily_s   = color.new(#089981, 60)
+c_asia      = color.new(#787B86, 93)
+c_lkz       = color.new(#2196F3, 93)
+c_nykz      = color.new(#FF9800, 93)
+c_pdh       = color.new(#F23645, 30)
+c_pdl       = color.new(#089981, 30)
+c_pwh       = color.new(#FF9800, 30)
+c_pwl       = color.new(#2196F3, 30)
+c_asian_h   = color.new(#787B86, 40)
+c_asian_l   = color.new(#787B86, 40)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MTF DATA — request.security() with lookahead_off (no repainting)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// H4 OHLC
+[h4_o, h4_h, h4_l, h4_c] = request.security(syminfo.tickerid, htf_entry,
+     [open, high, low, close], lookahead=barmerge.lookahead_off)
+
+// H4 previous bar (for A/V formation detection)
+[h4_h1, h4_l1, h4_c1] = request.security(syminfo.tickerid, htf_entry,
+     [high[1], low[1], close[1]], lookahead=barmerge.lookahead_off)
+[h4_h2, h4_l2, h4_c2] = request.security(syminfo.tickerid, htf_entry,
+     [high[2], low[2], close[2]], lookahead=barmerge.lookahead_off)
+
+// Daily OHLC
+[d_o, d_h, d_l, d_c] = request.security(syminfo.tickerid, htf_daily,
+     [open, high, low, close], lookahead=barmerge.lookahead_off)
+[d_c1, d_h1, d_l1] = request.security(syminfo.tickerid, htf_daily,
+     [close[1], high[1], low[1]], lookahead=barmerge.lookahead_off)
+[d_c2, d_h2, d_l2] = request.security(syminfo.tickerid, htf_daily,
+     [close[2], high[2], low[2]], lookahead=barmerge.lookahead_off)
+
+// Weekly OHLC
+[w_o, w_h, w_l, w_c] = request.security(syminfo.tickerid, htf_weekly,
+     [open, high, low, close], lookahead=barmerge.lookahead_off)
+[w_c1, w_h1, w_l1] = request.security(syminfo.tickerid, htf_weekly,
+     [close[1], high[1], low[1]], lookahead=barmerge.lookahead_off)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SNR DETECTION — A-formation / V-formation / Open-Close Level
+//  Uses CLOSING prices only (line chart logic)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// H4 A-formation (resistance): bullish candle [2] → bearish candle [1]
+// Level = closing price of bullish candle [2]
+h4_a_form = h4_c2 > h4_o and h4_c1 < h4_o  // [2]=bull, [1]=bear (using h4_o as approx open)
+h4_res_level = h4_c2
+
+// H4 V-formation (support): bearish candle [2] → bullish candle [1]
+// Level = closing price of bearish candle [2]
+h4_v_form = h4_c2 < h4_o and h4_c1 > h4_o
+h4_sup_level = h4_c2
+
+// H4 Open-Close Level: two consecutive bullish or bearish candles
+// Level = closing price of first candle [2]
+h4_oc_bull = h4_c2 > h4_o and h4_c1 > h4_o   // two bullish → support
+h4_oc_bear = h4_c2 < h4_o and h4_c1 < h4_o   // two bearish → resistance
+
+// Daily A-formation (resistance)
+d_a_form   = d_c2 > d_o and d_c1 < d_o
+d_res_level = d_c2
+
+// Daily V-formation (support)
+d_v_form   = d_c2 < d_o and d_c1 > d_o
+d_sup_level = d_c2
+
+// Weekly A-formation (resistance)
+w_a_form   = w_c1 > w_o and w_c < w_o
+w_res_level = w_c1
+
+// Weekly V-formation (support)
+w_v_form   = w_c1 < w_o and w_c > w_o
+w_sup_level = w_c1
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  STORY LINE — Directional Bias
+//  Bullish = price above key support & H4 structure bullish
+//  Bearish = price below key resistance & H4 structure bearish
+// ─────────────────────────────────────────────────────────────────────────────
+
+// H4 structure: simple HH/HL (bullish) or LH/LL (bearish)
+h4_bull_struct = h4_c > h4_c1 and h4_c1 > h4_c2
+h4_bear_struct = h4_c < h4_c1 and h4_c1 < h4_c2
+
+// Daily story line
+daily_bull = d_c > d_c1 and h4_bull_struct   // daily closing higher + H4 bullish
+daily_bear = d_c < d_c1 and h4_bear_struct   // daily closing lower  + H4 bearish
+
+// Weekly story line (senior bias)
+weekly_bull = w_c > w_c1
+weekly_bear = w_c < w_c1
+
+// Combined bias: weekly is senior
+var int bias = 0   // 1=bullish, -1=bearish, 0=neutral
+if weekly_bull and daily_bull
+    bias := 1
+else if weekly_bear and daily_bear
+    bias := -1
+else if weekly_bull and daily_bear
+    bias := 1   // weekly wins — still bullish overall
+else if weekly_bear and daily_bull
+    bias := -1  // weekly wins — still bearish overall
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SESSION DETECTION (UTC-based)
+// ─────────────────────────────────────────────────────────────────────────────
+utc_hour = hour(time, "UTC")
+utc_min  = minute(time, "UTC")
+utc_mins = utc_hour * 60 + utc_min
+
+// Asia: 00:00–06:00 UTC
+in_asia = utc_mins >= 0 and utc_mins < 360
+
+// London Kill Zone: 06:00–07:00 UTC
+in_lkz = utc_mins >= 360 and utc_mins < 420
+
+// London Open: 07:00–09:00 UTC
+in_london = utc_mins >= 420 and utc_mins < 540
+
+// NY Kill Zone: 11:00–12:00 UTC
+in_nykz = utc_mins >= 660 and utc_mins < 720
+
+// NY Open: 12:00–14:00 UTC
+in_ny = utc_mins >= 720 and utc_mins < 840
+
+// Valid entry session
+in_entry_session = in_lkz or in_london or in_nykz or in_ny
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SESSION LIQUIDITY LEVELS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Previous Day High/Low
+pdh = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_off)
+
+// Previous Week High/Low
+pwh = request.security(syminfo.tickerid, "W", high[1],  lookahead=barmerge.lookahead_off)
+pwl = request.security(syminfo.tickerid, "W", low[1],   lookahead=barmerge.lookahead_off)
+
+// Asian Session High/Low (track during Asia, hold until NY close)
+var float asian_high = na
+var float asian_low  = na
+var float asian_high_prev = na
+var float asian_low_prev  = na
+
+new_day = ta.change(time("D")) != 0
+if new_day
+    asian_high_prev := asian_high
+    asian_low_prev  := asian_low
+    asian_high      := na
+    asian_low       := na
+
+if in_asia
+    asian_high := na(asian_high) ? high : math.max(asian_high, high)
+    asian_low  := na(asian_low)  ? low  : math.min(asian_low, low)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  H4 ZONE REJECTION DETECTION
+//  H4 rejects a zone = H4 candle wicks into zone but closes back outside
+// ─────────────────────────────────────────────────────────────────────────────
+
+sl_pts  = sl_pips * pip_size
+tp_pts  = sl_pts * tp_r
+
+// H4 rejected resistance (bearish rejection): wick above level but closed below
+h4_rej_res = h4_h1 > h4_res_level and h4_c1 < h4_res_level and h4_a_form
+
+// H4 rejected support (bullish rejection): wick below level but closed above
+h4_rej_sup = h4_l1 < h4_sup_level and h4_c1 > h4_sup_level and h4_v_form
+
+// H4 structure break on current bar (for H1 trigger confirmation)
+h4_broke_down = h4_c < h4_l1   // broke below previous H4 low
+h4_broke_up   = h4_c > h4_h1   // broke above previous H4 high
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ENTRY SIGNALS
+//  Confirmation entry: bias + H4 reject + in_entry_session + not Asia
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SHORT signal: bearish bias + H4 rejected resistance + valid session
+short_sig = bias == -1 and h4_rej_res and in_entry_session and not in_asia
+
+// LONG signal: bullish bias + H4 rejected support + valid session
+long_sig  = bias == 1  and h4_rej_sup and in_entry_session and not in_asia
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — SESSION BACKGROUNDS
+// ─────────────────────────────────────────────────────────────────────────────
+bgcolor(show_asia     and in_asia  ? c_asia : na, title="Asia (No Trade)")
+bgcolor(show_lkz      and in_lkz   ? c_lkz  : na, title="London Kill Zone")
+bgcolor(show_lkz      and in_london? c_lkz  : na, title="London Open")
+bgcolor(show_nykz     and in_nykz  ? c_nykz : na, title="NY Kill Zone")
+bgcolor(show_nykz     and in_ny    ? c_nykz : na, title="NY Open")
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — H4 SNR ZONES (boxes)
+// ─────────────────────────────────────────────────────────────────────────────
+if show_h4_zones and h4_a_form
+    box.new(bar_index - 2, h4_res_level + sl_pts * 0.3,
+            bar_index + zone_extend, h4_res_level - sl_pts * 0.3,
+            border_color=c_res, bgcolor=c_res_fill, border_width=1)
+
+if show_h4_zones and h4_v_form
+    box.new(bar_index - 2, h4_sup_level + sl_pts * 0.3,
+            bar_index + zone_extend, h4_sup_level - sl_pts * 0.3,
+            border_color=c_sup, bgcolor=c_sup_fill, border_width=1)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — DAILY SNR LEVELS (horizontal lines)
+// ─────────────────────────────────────────────────────────────────────────────
+if show_daily_snr and d_a_form
+    line.new(bar_index - 3, d_res_level, bar_index + zone_extend, d_res_level,
+             color=c_daily_r, width=1, style=line.style_dashed)
+    label.new(bar_index + zone_extend, d_res_level, "D-Res",
+              style=label.style_label_left, color=color.new(#F23645,80),
+              textcolor=c_daily_r, size=size.small)
+
+if show_daily_snr and d_v_form
+    line.new(bar_index - 3, d_sup_level, bar_index + zone_extend, d_sup_level,
+             color=c_daily_s, width=1, style=line.style_dashed)
+    label.new(bar_index + zone_extend, d_sup_level, "D-Sup",
+              style=label.style_label_left, color=color.new(#089981,80),
+              textcolor=c_daily_s, size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — WEEKLY SNR LEVELS
+// ─────────────────────────────────────────────────────────────────────────────
+if show_weekly_snr and w_a_form
+    line.new(bar_index - 3, w_res_level, bar_index + zone_extend, w_res_level,
+             color=c_weekly_r, width=2, style=line.style_solid)
+    label.new(bar_index + zone_extend, w_res_level, "W-Res",
+              style=label.style_label_left, color=color.new(#FF9800,80),
+              textcolor=c_weekly_r, size=size.normal)
+
+if show_weekly_snr and w_v_form
+    line.new(bar_index - 3, w_sup_level, bar_index + zone_extend, w_sup_level,
+             color=c_weekly_s, width=2, style=line.style_solid)
+    label.new(bar_index + zone_extend, w_sup_level, "W-Sup",
+              style=label.style_label_left, color=color.new(#2196F3,80),
+              textcolor=c_weekly_s, size=size.normal)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — SESSION LIQUIDITY LEVELS
+// ─────────────────────────────────────────────────────────────────────────────
+plot(show_pdhl ? pdh : na, "Prev Day High", color=c_pdh, linewidth=1, style=plot.style_stepline)
+plot(show_pdhl ? pdl : na, "Prev Day Low",  color=c_pdl, linewidth=1, style=plot.style_stepline)
+plot(show_pwhl ? pwh : na, "Prev Week High", color=c_pwh, linewidth=2, style=plot.style_stepline)
+plot(show_pwhl ? pwl : na, "Prev Week Low",  color=c_pwl, linewidth=2, style=plot.style_stepline)
+plot(show_asian_hl and not na(asian_high_prev) ? asian_high_prev : na, "Asian High",
+     color=c_asian_h, linewidth=1, style=plot.style_stepline)
+plot(show_asian_hl and not na(asian_low_prev) ? asian_low_prev : na, "Asian Low",
+     color=c_asian_l, linewidth=1, style=plot.style_stepline)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — BIAS LABEL (top right)
+// ─────────────────────────────────────────────────────────────────────────────
+bias_txt   = bias == 1 ? "BULLISH ▲" : bias == -1 ? "BEARISH ▼" : "NEUTRAL ─"
+bias_col   = bias == 1 ? color.new(#089981,0) : bias == -1 ? color.new(#F23645,0) : color.gray
+var label bias_lbl = na
+label.delete(bias_lbl)
+bias_lbl := label.new(bar_index, high * 1.0002,
+     "Alchemist Bias: " + bias_txt +
+     "\nWeekly: " + (weekly_bull ? "▲ Bull" : weekly_bear ? "▼ Bear" : "─") +
+     "\nDaily:  " + (daily_bull  ? "▲ Bull" : daily_bear  ? "▼ Bear" : "─") +
+     "\nSession: " + (in_asia ? "Asia (wait)" : in_lkz ? "LKZ ✅" : in_nykz ? "NYKZ ✅" :
+                      in_london ? "London ✅" : in_ny ? "NY ✅" : "Off-session"),
+     style=label.style_label_lower_right,
+     color=color.new(#131722, 5),
+     textcolor=bias_col,
+     size=size.normal)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — ENTRY SIGNALS
+// ─────────────────────────────────────────────────────────────────────────────
+if show_signals and long_sig
+    float e  = h4_sup_level
+    float sl = e - sl_pts
+    float tp = e + tp_pts
+    // TP/SL boxes
+    box.new(bar_index, tp, bar_index + zone_extend, e,
+            border_color=color.new(#089981,0), bgcolor=color.new(#089981,85))
+    box.new(bar_index, e,  bar_index + zone_extend, sl,
+            border_color=color.new(#787B86,0), bgcolor=color.new(#787B86,90))
+    if show_labels
+        label.new(bar_index, sl * 0.9995,
+             "🟢 ALCHEMIST LONG\n" +
+             "━━━━━━━━━━━━━━━━━\n" +
+             "Entry  " + str.tostring(e,  "#.00") + "\n" +
+             "SL     " + str.tostring(sl, "#.00") + "\n" +
+             "TP     " + str.tostring(tp, "#.00") + "\n" +
+             "━━━━━━━━━━━━━━━━━\n" +
+             "R:R  1:" + str.tostring(tp_r, "#.0") + "\n" +
+             "H4 V-formation support\n" +
+             "Bias: " + bias_txt,
+             style=label.style_label_up,
+             color=color.new(#131722,5),
+             textcolor=color.new(#089981,0),
+             size=size.normal)
+
+if show_signals and short_sig
+    float e  = h4_res_level
+    float sl = e + sl_pts
+    float tp = e - tp_pts
+    box.new(bar_index, e,  bar_index + zone_extend, tp,
+            border_color=color.new(#F23645,0), bgcolor=color.new(#F23645,85))
+    box.new(bar_index, sl, bar_index + zone_extend, e,
+            border_color=color.new(#787B86,0), bgcolor=color.new(#787B86,90))
+    if show_labels
+        label.new(bar_index, sl * 1.0005,
+             "🔴 ALCHEMIST SHORT\n" +
+             "━━━━━━━━━━━━━━━━━\n" +
+             "Entry  " + str.tostring(e,  "#.00") + "\n" +
+             "SL     " + str.tostring(sl, "#.00") + "\n" +
+             "TP     " + str.tostring(tp, "#.00") + "\n" +
+             "━━━━━━━━━━━━━━━━━\n" +
+             "R:R  1:" + str.tostring(tp_r, "#.0") + "\n" +
+             "H4 A-formation resistance\n" +
+             "Bias: " + bias_txt,
+             style=label.style_label_down,
+             color=color.new(#131722,5),
+             textcolor=color.new(#F23645,0),
+             size=size.normal)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+alertcondition(long_sig,
+     title="🟢 Alchemist LONG Signal",
+     message='{"alert":"LONG","strategy":"Alchemist","symbol":"{{ticker}}","entry":"{{close}}"}')
+
+alertcondition(short_sig,
+     title="🔴 Alchemist SHORT Signal",
+     message='{"alert":"SHORT","strategy":"Alchemist","symbol":"{{ticker}}","entry":"{{close}}"}')
+
+alertcondition(long_sig or short_sig,
+     title="⚡ Alchemist Signal (Any)",
+     message='{"alert":"SIGNAL","strategy":"Alchemist","symbol":"{{ticker}}"}')
