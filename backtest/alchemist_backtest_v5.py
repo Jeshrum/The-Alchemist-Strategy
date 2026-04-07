@@ -1,18 +1,15 @@
 """
-THE ALCHEMIST SNR — Optimized Backtest v4
+THE ALCHEMIST SNR — Backtest v5
 XAUUSD 2009–2026
 
-Changes from v3 → v4 (high-frequency, high-WR, 1:3 R:R):
-1. TP = 3×ATR — minimum 1:3 R:R as required
-2. Removed weekly candle direction check (was blocking 40-50% of valid trend weeks)
-3. Removed daily close direction check (was blocking pullback entry days)
-4. Restored strict 3-EMA stack (core quality gate — protects WR)
-5. ADX threshold: 22 (slightly looser than 28, but EMA stack keeps quality)
-6. Extended NY kill zone 14:00 → 16:00 UTC (London-NY overlap)
-7. Extended H4 rejection lookback 6 → 10 bars
-8. Per-session trade limit: 1 per London session + 1 per NY session (up to 2/day)
-9. RSI(14) H4 filter: >50 longs / <50 shorts
-10. Session saved in trade log (London / NY)
+Timeframe cascade: Daily → H4 → M15 (weekly dropped entirely)
+
+Logic:
+- BIAS    : Daily EMA20 direction (bull = close > EMA20, bear = close < EMA20)
+- H4 CONF : EMA9>21>50 stack + ADX>22 + DI direction + RSI>50/< 50 + EMA21 rejection
+- M15 ENTRY: Price crosses M15 EMA9 in bias direction while above/below M15 EMA21
+- SL: 1×ATR(H4) | TP: 2×ATR(H4) | 1:2 R:R | 1% risk
+- Sessions: London (06-09 UTC) + NY (11-16 UTC) | max 1 trade per session
 """
 
 import os
@@ -23,8 +20,9 @@ import pytz
 
 warnings.filterwarnings("ignore")
 
-H1_PARQUET = "/Users/mac/Desktop/JESH XAUUSD/data/XAUUSD_H1.parquet"
-OUT_DIR    = os.path.join(os.path.dirname(__file__), "results")
+M15_PARQUET = "/Users/mac/Desktop/JESH XAUUSD/data/XAUUSD_M15.parquet"
+H1_PARQUET  = "/Users/mac/Desktop/JESH XAUUSD/data/XAUUSD_H1.parquet"
+OUT_DIR     = os.path.join(os.path.dirname(__file__), "results")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 UTC        = pytz.utc
@@ -33,11 +31,10 @@ RISK_PCT   = 0.01
 COMMISSION = 1.0
 ATR_LEN    = 14
 SL_MULT    = 1.0
-TP_MULT    = 3.0    # 1:3 R:R minimum as required
+TP_MULT    = 2.0   # 1:2 R:R (v3 sweet spot, drop weekly removes the bottleneck)
 
 
 def get_session(hour_utc):
-    """Return session name or None if outside kill zones."""
     if 6 <= hour_utc < 9:
         return "London"
     if 11 <= hour_utc < 16:
@@ -49,8 +46,8 @@ def get_session(hour_utc):
 #  LOAD + RESAMPLE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_h1():
-    df = pd.read_parquet(H1_PARQUET)
+def load_parquet(path):
+    df = pd.read_parquet(path)
     df = df[["open", "high", "low", "close"]].astype(float)
     if df.index.tz is None:
         df.index = df.index.tz_localize(UTC)
@@ -115,35 +112,24 @@ def prepare_h4(h4):
     return h4
 
 
-def prepare_h1(h1):
-    h1 = h1.copy()
-    h1["ema9"]  = calc_ema(h1["close"], 9)
-    h1["ema21"] = calc_ema(h1["close"], 21)
-    return h1
+def prepare_m15(m15):
+    m15 = m15.copy()
+    m15["ema9"]  = calc_ema(m15["close"], 9)
+    m15["ema21"] = calc_ema(m15["close"], 21)
+    return m15
 
 
-def compute_daily_bias(daily, weekly):
+def compute_daily_bias(daily):
     """
-    Bull: daily close > EMA20 AND weekly close > EMA10
-    Bear: daily close < EMA20 AND weekly close < EMA10
-    Shifted by 1 to avoid lookahead.
+    Bull: daily close > EMA20 (shifted 1 bar — no lookahead)
+    Bear: daily close < EMA20
+    Weekly dropped entirely.
     """
     d_ema = calc_ema(daily["close"], 20).shift(1)
     d_c   = daily["close"].shift(1)
-    w_ema = calc_ema(weekly["close"], 10).shift(1)
-    w_c   = weekly["close"].shift(1)
-
-    d_bull = d_c > d_ema
-    d_bear = d_c < d_ema
-    w_bull = w_c > w_ema
-    w_bear = w_c < w_ema
-
-    w_bull_d = w_bull.reindex(daily.index, method="ffill")
-    w_bear_d = w_bear.reindex(daily.index, method="ffill")
-
-    bias = pd.Series(0, index=daily.index)
-    bias[d_bull & w_bull_d] =  1
-    bias[d_bear & w_bear_d] = -1
+    bias  = pd.Series(0, index=daily.index)
+    bias[d_c > d_ema] =  1
+    bias[d_c < d_ema] = -1
     return bias
 
 
@@ -151,19 +137,18 @@ def compute_daily_bias(daily, weekly):
 #  BACKTEST ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_backtest(h1_raw, h4_raw, daily, weekly):
+def run_backtest(m15_raw, h4_raw, daily):
     print("  Preparing indicators...")
     h4   = prepare_h4(h4_raw)
-    h1   = prepare_h1(h1_raw)
-    bias = compute_daily_bias(daily, weekly)
+    m15  = prepare_m15(m15_raw)
+    bias = compute_daily_bias(daily)
 
-    h1["date"]     = h1.index.date
-    h1["hour_utc"] = h1.index.hour
+    m15["date"]     = m15.index.date
+    m15["hour_utc"] = m15.index.hour
 
-    dates        = sorted(set(h1["date"]))
+    dates        = sorted(set(m15["date"]))
     active_trade = None
-    # Per-session trade tracking: {(date, session): True}
-    session_done = {}
+    session_done = {}   # {(date, session): True}
     trades       = []
 
     print(f"  Running {len(dates)} days...")
@@ -173,7 +158,7 @@ def run_backtest(h1_raw, h4_raw, daily, weekly):
         if dow >= 5:
             continue
 
-        day_bars = h1[h1["date"] == date]
+        day_bars = m15[m15["date"] == date]
         if day_bars.empty:
             continue
 
@@ -225,11 +210,10 @@ def run_backtest(h1_raw, h4_raw, daily, weekly):
             if session is None:
                 continue
 
-            # Max 1 trade per session (London & NY tracked separately)
             if session_done.get((date, session)):
                 continue
 
-            # ── Daily + Weekly bias ────────────────────────────────────────
+            # ── Daily bias only (no weekly) ────────────────────────────────
             day_ts   = pd.Timestamp(date, tz=UTC)
             bias_idx = bias.index[bias.index <= day_ts]
             if len(bias_idx) == 0:
@@ -257,7 +241,7 @@ def run_backtest(h1_raw, h4_raw, daily, weekly):
             if np.isnan(h4_atr) or h4_atr <= 0 or np.isnan(h4_adx):
                 continue
 
-            # ── Strict 3-EMA stack (core quality gate) ────────────────────
+            # ── H4 EMA stack (strict) ─────────────────────────────────────
             long_stack  = h4_ema9 > h4_ema21 > h4_ema50
             short_stack = h4_ema9 < h4_ema21 < h4_ema50
 
@@ -266,27 +250,22 @@ def run_backtest(h1_raw, h4_raw, daily, weekly):
             if cur_bias == -1 and not short_stack:
                 continue
 
-            # ── ADX > 22 (trending — slightly looser than 28) ─────────────
+            # ── ADX > 22 ──────────────────────────────────────────────────
             if h4_adx < 22:
                 continue
 
-            # ── DI directional confirmation ───────────────────────────────
+            # ── DI directional ────────────────────────────────────────────
             if cur_bias == 1 and h4_di_p <= h4_di_n:
                 continue
             if cur_bias == -1 and h4_di_n <= h4_di_p:
                 continue
 
-            # ── RSI trend confirmation ────────────────────────────────────
+            # ── RSI H4 ────────────────────────────────────────────────────
             if not np.isnan(h4_rsi):
                 if cur_bias == 1 and h4_rsi < 50:
                     continue
                 if cur_bias == -1 and h4_rsi > 50:
                     continue
-
-            # ── ATR momentum: above 80% of 20-bar average ────────────────
-            atr_avg = h4_snap["atr"].tail(20).mean()
-            if h4_atr < atr_avg * 0.8:
-                continue
 
             # ── H4 EMA21 rejection (last 10 bars, strong candle body) ─────
             h4_recent = h4_snap.tail(10)
@@ -311,76 +290,76 @@ def run_backtest(h1_raw, h4_raw, daily, weekly):
             if cur_bias == -1 and not ema21_rejection_short:
                 continue
 
-            # ── Price not overextended from EMA21 ─────────────────────────
+            # ── Price not overextended from H4 EMA21 ─────────────────────
             dist_from_ema21 = abs(c - h4_ema21)
             if dist_from_ema21 > h4_atr * 2.0:
                 continue
 
-            # ── H4 close must be above/below EMA9 ────────────────────────
+            # ── H4 close on right side of EMA9 ───────────────────────────
             if cur_bias == 1 and h4_c < h4_ema9:
                 continue
             if cur_bias == -1 and h4_c > h4_ema9:
                 continue
 
-            # ── H1 EMA21: price on right side ────────────────────────────
-            h1_ema21 = bar["ema21"]
-            if not np.isnan(h1_ema21):
-                if cur_bias == 1 and c < h1_ema21:
-                    continue
-                if cur_bias == -1 and c > h1_ema21:
-                    continue
-
-            # ── H1 trigger: EMA9 cross ────────────────────────────────────
-            h1_ema9 = bar["ema9"]
-            if np.isnan(h1_ema9):
+            # ── M15 trigger: EMA9 cross while on right side of EMA21 ──────
+            m15_ema9  = bar["ema9"]
+            m15_ema21 = bar["ema21"]
+            if np.isnan(m15_ema9) or np.isnan(m15_ema21):
                 continue
             if i == 0:
                 continue
 
-            prev_bar = day_bars.iloc[i - 1]
-            prev_c   = prev_bar["close"]
-            prev_e9  = prev_bar["ema9"]
+            prev_bar  = day_bars.iloc[i - 1]
+            prev_c    = prev_bar["close"]
+            prev_e9   = prev_bar["ema9"]
             if np.isnan(prev_e9):
                 continue
 
-            h1_long_trig  = (prev_c < prev_e9) and (c > h1_ema9) and (cur_bias == 1)
-            h1_short_trig = (prev_c > prev_e9) and (c < h1_ema9) and (cur_bias == -1)
+            # M15: price must be on right side of EMA21 (trend confirmation)
+            if cur_bias == 1 and c < m15_ema21:
+                continue
+            if cur_bias == -1 and c > m15_ema21:
+                continue
+
+            # M15 EMA9 cross trigger
+            m15_long_trig  = (prev_c < prev_e9) and (c > m15_ema9) and (cur_bias == 1)
+            m15_short_trig = (prev_c > prev_e9) and (c < m15_ema9) and (cur_bias == -1)
 
             # ── Entry ──────────────────────────────────────────────────────
-            if h1_long_trig or h1_short_trig:
+            if m15_long_trig or m15_short_trig:
                 sl_dist = h4_atr * SL_MULT
                 tp_dist = h4_atr * TP_MULT
                 lot     = max(0.01, round(ACCOUNT * RISK_PCT / (sl_dist * 100), 2))
 
-                if h1_long_trig:
-                    entry = c
-                    sl    = round(entry - sl_dist, 2)
-                    tp    = round(entry + tp_dist, 2)
+                if m15_long_trig:
+                    entry     = c
+                    sl        = round(entry - sl_dist, 2)
+                    tp        = round(entry + tp_dist, 2)
                     direction = "LONG"
                 else:
-                    entry = c
-                    sl    = round(entry + sl_dist, 2)
-                    tp    = round(entry - tp_dist, 2)
+                    entry     = c
+                    sl        = round(entry + sl_dist, 2)
+                    tp        = round(entry - tp_dist, 2)
                     direction = "SHORT"
 
                 active_trade = {
-                    "dir":      direction,
-                    "entry":    entry,
-                    "sl":       sl,
-                    "tp":       tp,
-                    "lot":      lot,
-                    "open_ts":  str(ts),
-                    "session":  session,
+                    "dir":     direction,
+                    "entry":   entry,
+                    "sl":      sl,
+                    "tp":      tp,
+                    "lot":     lot,
+                    "open_ts": str(ts),
+                    "session": session,
                 }
                 session_done[(date, session)] = True
 
     # Close any open trade at end of data
     if active_trade is not None:
-        ep  = h1["close"].iloc[-1]
+        ep  = m15["close"].iloc[-1]
         pnl = (ep - active_trade["entry"]) * (1 if active_trade["dir"] == "LONG" else -1) * active_trade["lot"] * 100 - COMMISSION
         trades.append({**active_trade, "exit": ep, "reason": "fc", "pnl": pnl,
-                       "year": h1.index[-1].year, "month": h1.index[-1].month,
-                       "date": h1.index[-1].date()})
+                       "year": m15.index[-1].year, "month": m15.index[-1].month,
+                       "date": m15.index[-1].date()})
 
     return pd.DataFrame(trades)
 
@@ -409,15 +388,14 @@ def print_results(tdf):
     tot_m   = len(monthly)
     avg_tpm = len(tdf) / tot_m
 
-    # Session breakdown
-    if "session" in tdf.columns:
-        lon = tdf[tdf["session"] == "London"]
-        ny  = tdf[tdf["session"] == "NY"]
-        lon_wr = len(lon[lon["pnl"] > 0]) / len(lon) * 100 if len(lon) > 0 else 0
-        ny_wr  = len(ny[ny["pnl"] > 0]) / len(ny) * 100 if len(ny) > 0 else 0
+    lon = tdf[tdf["session"] == "London"] if "session" in tdf.columns else pd.DataFrame()
+    ny  = tdf[tdf["session"] == "NY"]     if "session" in tdf.columns else pd.DataFrame()
+    lon_wr = len(lon[lon["pnl"] > 0]) / len(lon) * 100 if len(lon) > 0 else 0
+    ny_wr  = len(ny[ny["pnl"] > 0])  / len(ny)  * 100 if len(ny)  > 0 else 0
 
     print("\n" + "="*60)
-    print("THE ALCHEMIST SNR v4 — BACKTEST RESULTS (2009–2026)")
+    print("THE ALCHEMIST SNR v5 — BACKTEST RESULTS (2009–2026)")
+    print("Cascade: Daily → H4 → M15  |  Weekly REMOVED")
     print("="*60)
     print(f"  Total Trades       : {len(tdf):,}")
     print(f"  Trades/Month avg   : {avg_tpm:.1f}")
@@ -431,7 +409,7 @@ def print_results(tdf):
     print(f"  Worst Month        : ${monthly.min():,.0f}")
     print(f"  Best Month         : ${monthly.max():,.0f}")
 
-    if "session" in tdf.columns:
+    if len(lon) > 0 or len(ny) > 0:
         print(f"\n  London  : {len(lon):3d} trades | WR {lon_wr:.1f}% | P&L ${lon['pnl'].sum():,.0f}")
         print(f"  NY      : {len(ny):3d} trades | WR {ny_wr:.1f}% | P&L ${ny['pnl'].sum():,.0f}")
 
@@ -440,18 +418,19 @@ def print_results(tdf):
     print("─"*60)
     print(f"{'Year':<8} {'Net P&L':>12} {'Return %':>10} {'Trades':>8} {'WR':>6}")
     print("-"*60)
-    for yr in sorted(yearly.index):
-        pnl_yr = yearly[yr]
+    yearly_sorted = tdf.groupby("year")["pnl"].sum()
+    for yr in sorted(yearly_sorted.index):
+        pnl_yr = yearly_sorted[yr]
         pct    = pnl_yr / ACCOUNT * 100
         yr_t   = tdf[tdf["year"] == yr]
         yr_wr  = len(yr_t[yr_t["pnl"] > 0]) / len(yr_t) * 100 if len(yr_t) > 0 else 0
         print(f"{yr:<8} ${pnl_yr:>10,.0f} {pct:>+9.1f}% {len(yr_t):>8} {yr_wr:>5.0f}%")
 
     print("="*60)
-    print(f"\nRisk: 1% | SL: 1×ATR(H4) | TP: 3×ATR(H4) | 1:3 R:R")
-    print(f"Bias: Daily EMA20 + Weekly EMA10")
+    print(f"\nRisk: 1% | SL: 1×ATR(H4) | TP: 2×ATR(H4) | 1:2 R:R")
+    print(f"Bias: Daily EMA20 only (weekly removed)")
     print(f"H4:  EMA9>21>50 stack + ADX>22 + DI + RSI + EMA21 rejection (10 bars)")
-    print(f"H1:  EMA21 side + EMA9 cross trigger")
+    print(f"M15: EMA21 side + EMA9 cross trigger")
     print(f"Sessions: London (06-09 UTC) + NY (11-16 UTC) | max 1 trade/session")
 
 
@@ -460,22 +439,24 @@ def print_results(tdf):
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("Loading H1 data from parquet (2009–2026)...")
-    h1 = load_h1()
-    print(f"  {len(h1):,} H1 bars | {h1.index[0].date()} → {h1.index[-1].date()}")
+    print("Loading M15 data from parquet...")
+    m15 = load_parquet(M15_PARQUET)
+    print(f"  {len(m15):,} M15 bars | {m15.index[0].date()} → {m15.index[-1].date()}")
 
-    print("Resampling to H4, Daily, Weekly...")
-    h4     = resample(h1, "4h")
-    daily  = resample(h1, "1D")
-    weekly = resample(h1, "1W")
-    print(f"  H4: {len(h4):,} | Daily: {len(daily):,} | Weekly: {len(weekly):,}")
+    print("Loading H1 for H4 resample...")
+    h1 = load_parquet(H1_PARQUET)
 
-    print("Running v4 backtest...")
-    trades = run_backtest(h1, h4, daily, weekly)
+    print("Resampling to H4 and Daily...")
+    h4    = resample(h1, "4h")
+    daily = resample(h1, "1D")
+    print(f"  H4: {len(h4):,} | Daily: {len(daily):,}")
+
+    print("Running v5 backtest (Daily→H4→M15)...")
+    trades = run_backtest(m15, h4, daily)
     print(f"  {len(trades):,} trades generated")
 
     if not trades.empty:
-        trades.to_csv(os.path.join(OUT_DIR, "trade_log_v4.csv"), index=False)
-        print(f"  Saved → backtest/results/trade_log_v4.csv")
+        trades.to_csv(os.path.join(OUT_DIR, "trade_log_v5.csv"), index=False)
+        print(f"  Saved → backtest/results/trade_log_v5.csv")
 
     print_results(trades)
