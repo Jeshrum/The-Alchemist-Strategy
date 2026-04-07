@@ -1,0 +1,9 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+backtest/__pycache__/
+backtest/*.xlsx
+*.parquet
+*.log
+.env
