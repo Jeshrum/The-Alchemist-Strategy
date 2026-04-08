@@ -102,8 +102,10 @@ h4_rsi_raw = ta.rsi(close, 14)
 h4_rej_long_raw  = false
 h4_rej_short_raw = false
 for i = 1 to 10
-    hb_hi  = high[i];  hb_lo = low[i]
-    hb_op  = open[i];  hb_cl = close[i]
+    hb_hi  = high[i]
+    hb_lo  = low[i]
+    hb_op  = open[i]
+    hb_cl  = close[i]
     rng    = hb_hi - hb_lo
     bdy    = math.abs(hb_cl - hb_op)
     strong = rng > 0 and bdy / rng >= 0.4
