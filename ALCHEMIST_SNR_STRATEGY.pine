@@ -1,0 +1,184 @@
+// =============================================================================
+// THE ALCHEMIST SNR v5a — STRATEGY VERSION (Backtest)
+// Daily → H4 → M15 | London Only
+// =============================================================================
+// Bias   : Daily EMA20 (bull = close > EMA20, bear = close < EMA20)
+// Confirm: H4 EMA9>21>50 stack + ADX>22 + DI + RSI>50/<50 + EMA21 rejection
+// Entry  : M15 EMA9 cross while price on right side of M15 EMA21
+// Session: London Kill Zone only (06:00–09:00 UTC)
+// R:R    : 1:2 (SL = 1×ATR H4, TP = 2×ATR H4)
+// =============================================================================
+
+//@version=6
+strategy("Alchemist v5a — Strategy", overlay=true,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=1,
+     initial_capital=10000,
+     commission_type=strategy.commission.cash_per_contract,
+     commission_value=0.07,
+     slippage=2,
+     max_lines_count=200, max_boxes_count=200, max_labels_count=200)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var g_tf = "Timeframes"
+htf_h4    = input.timeframe("240", "H4 Timeframe",    group=g_tf)
+htf_daily = input.timeframe("D",   "Daily Timeframe", group=g_tf)
+
+var g_ind = "Indicator Settings"
+adx_thresh  = input.int(22,   "ADX Minimum",           group=g_ind, minval=10, maxval=50)
+atr_len     = input.int(14,   "ATR Length",            group=g_ind, minval=5,  maxval=30)
+ema_d_len   = input.int(20,   "Daily EMA Length",      group=g_ind, minval=5,  maxval=50)
+
+var g_sess = "Sessions"
+show_london = input.bool(true, "Highlight London (06-09 UTC)", group=g_sess)
+show_asia   = input.bool(true, "Highlight Asia (No Trade)",    group=g_sess)
+
+var g_snr = "SNR Zones"
+show_h4_zones  = input.bool(true, "Show H4 EMA21 Zone",  group=g_snr)
+show_daily_ema = input.bool(true, "Show Daily EMA20",     group=g_snr)
+
+var g_sig = "Signals"
+show_signals  = input.bool(true, "Show Entry Signals",  group=g_sig)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  COLOURS
+// ─────────────────────────────────────────────────────────────────────────────
+c_bull     = color.new(#089981, 0)
+c_bear     = color.new(#F23645, 0)
+c_london   = color.new(#2196F3, 92)
+c_asia     = color.new(#787B86, 93)
+c_d_ema    = color.new(#FF9800, 0)
+c_h4_ema21 = color.new(#9C27B0, 0)
+c_neutral  = color.gray
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DAILY BIAS
+// ─────────────────────────────────────────────────────────────────────────────
+[d_close, d_ema20] = request.security(syminfo.tickerid, htf_daily,
+     [close, ta.ema(close, ema_d_len)],
+     lookahead=barmerge.lookahead_off)
+
+daily_bull = d_close > d_ema20
+daily_bear = d_close < d_ema20
+bias = daily_bull ? 1 : daily_bear ? -1 : 0
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  H4 INDICATORS
+// ─────────────────────────────────────────────────────────────────────────────
+h4_ema9_raw  = ta.ema(close, 9)
+h4_ema21_raw = ta.ema(close, 21)
+h4_ema50_raw = ta.ema(close, 50)
+h4_atr_raw   = ta.atr(atr_len)
+[h4_adx_raw, h4_dip_raw, h4_din_raw] = ta.dmi(atr_len, atr_len)
+h4_rsi_raw   = ta.rsi(close, 14)
+
+[h4_e9, h4_e21, h4_e50, h4_atr, h4_adx, h4_dip, h4_din, h4_rsi, h4_close, h4_high, h4_low] =
+     request.security(syminfo.tickerid, htf_h4,
+     [h4_ema9_raw, h4_ema21_raw, h4_ema50_raw,
+      h4_atr_raw, h4_adx_raw, h4_dip_raw, h4_din_raw, h4_rsi_raw,
+      close, high, low],
+     lookahead=barmerge.lookahead_off)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  H4 EMA21 REJECTION
+// ─────────────────────────────────────────────────────────────────────────────
+h4_rej_long_raw  = false
+h4_rej_short_raw = false
+for i = 1 to 10
+    hb_hi  = high[i]
+    hb_lo  = low[i]
+    hb_op  = open[i]
+    hb_cl  = close[i]
+    rng    = hb_hi - hb_lo
+    bdy    = math.abs(hb_cl - hb_op)
+    strong = rng > 0 and bdy / rng >= 0.4
+    if strong
+        if hb_lo <= ta.ema(close, 21)[i] + ta.atr(atr_len)[i] * 0.5 and hb_cl > hb_op and hb_cl > ta.ema(close, 9)[i]
+            h4_rej_long_raw  := true
+        if hb_hi >= ta.ema(close, 21)[i] - ta.atr(atr_len)[i] * 0.5 and hb_cl < hb_op and hb_cl < ta.ema(close, 9)[i]
+            h4_rej_short_raw := true
+
+[h4_rej_long, h4_rej_short] = request.security(syminfo.tickerid, htf_h4,
+     [h4_rej_long_raw, h4_rej_short_raw],
+     lookahead=barmerge.lookahead_off)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  M15 EMAs
+// ─────────────────────────────────────────────────────────────────────────────
+m15_e9  = ta.ema(close, 9)
+m15_e21 = ta.ema(close, 21)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SESSION DETECTION (UTC)
+// ─────────────────────────────────────────────────────────────────────────────
+utc_hour = hour(time, "UTC")
+utc_min  = minute(time, "UTC")
+utc_mins = utc_hour * 60 + utc_min
+
+in_asia   = utc_mins >= 0   and utc_mins < 360
+in_london = utc_mins >= 360 and utc_mins < 540
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  H4 CONFIRMATION GATE
+// ─────────────────────────────────────────────────────────────────────────────
+h4_stack_bull = h4_e9 > h4_e21 and h4_e21 > h4_e50
+h4_stack_bear = h4_e9 < h4_e21 and h4_e21 < h4_e50
+h4_adx_ok     = h4_adx >= adx_thresh
+h4_di_bull    = h4_dip > h4_din
+h4_di_bear    = h4_din > h4_dip
+h4_rsi_bull   = h4_rsi >= 50
+h4_rsi_bear   = h4_rsi <= 50
+not_extended  = math.abs(close - h4_e21) <= h4_atr * 2.0
+h4_c_above_e9 = h4_close >= h4_e9
+h4_c_below_e9 = h4_close <= h4_e9
+
+h4_bull_ok = h4_stack_bull and h4_adx_ok and h4_di_bull and h4_rsi_bull and h4_rej_long  and not_extended and h4_c_above_e9
+h4_bear_ok = h4_stack_bear and h4_adx_ok and h4_di_bear and h4_rsi_bear and h4_rej_short and not_extended and h4_c_below_e9
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  M15 ENTRY TRIGGER
+// ─────────────────────────────────────────────────────────────────────────────
+price_above_e21 = close >= m15_e21
+price_below_e21 = close <= m15_e21
+
+ema9_cross_up = close[1] < m15_e9[1] and close > m15_e9
+ema9_cross_dn = close[1] > m15_e9[1] and close < m15_e9
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SIGNALS
+// ─────────────────────────────────────────────────────────────────────────────
+long_sig  = bias == 1  and h4_bull_ok and price_above_e21 and ema9_cross_up and in_london
+short_sig = bias == -1 and h4_bear_ok and price_below_e21 and ema9_cross_dn and in_london
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  STRATEGY ENTRIES / EXITS
+// ─────────────────────────────────────────────────────────────────────────────
+if long_sig and strategy.position_size == 0
+    sl = close - h4_atr * 1.0
+    tp = close + h4_atr * 2.0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=sl, limit=tp)
+
+if short_sig and strategy.position_size == 0
+    sl = close + h4_atr * 1.0
+    tp = close - h4_atr * 2.0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=sl, limit=tp)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS
+// ─────────────────────────────────────────────────────────────────────────────
+bgcolor(show_asia   and in_asia   ? c_asia   : na, title="Asia (No Trade)")
+bgcolor(show_london and in_london ? c_london : na, title="London Session")
+
+plot(m15_e9,  "M15 EMA9",  color=color.new(#FF9800, 0), linewidth=1)
+plot(m15_e21, "M15 EMA21", color=color.new(#9C27B0, 0), linewidth=1)
+plot(show_daily_ema ? d_ema20 : na, "Daily EMA20", color=c_d_ema, linewidth=2, style=plot.style_stepline)
+plot(show_h4_zones  ? h4_e21  : na, "H4 EMA21",   color=c_h4_ema21, linewidth=1, style=plot.style_stepline)
+
+plotshape(show_signals and long_sig,  title="LONG",  location=location.belowbar,
+     style=shape.triangleup,   color=c_bull, size=size.normal)
+plotshape(show_signals and short_sig, title="SHORT", location=location.abovebar,
+     style=shape.triangledown, color=c_bear, size=size.normal)
