@@ -12,11 +12,12 @@
 //@version=6
 strategy("Alchemist v5a — Strategy", overlay=true,
      default_qty_type=strategy.percent_of_equity,
-     default_qty_value=1,
+     default_qty_value=100,
      initial_capital=10000,
-     commission_type=strategy.commission.cash_per_contract,
-     commission_value=0.07,
-     slippage=2,
+     commission_type=strategy.commission.percent,
+     commission_value=0.01,
+     slippage=1,
+     process_orders_on_close=true,
      max_lines_count=200, max_boxes_count=200, max_labels_count=200)
 
 // ─────────────────────────────────────────────────────────────────────────────
