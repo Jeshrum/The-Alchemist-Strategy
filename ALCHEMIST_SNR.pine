@@ -6,7 +6,7 @@
 // Entry  : M15 EMA9 cross while price on right side of M15 EMA21
 // Session: London Kill Zone only (06:00–09:00 UTC)
 // R:R    : 1:2 (SL = 1×ATR H4, TP = 2×ATR H4)
-// Backtest (2009–2026): 45% WR | PF 1.61 | +276% | 10.9% MaxDD
+// Backtest: Results pending — run ALCHEMIST_SNR_STRATEGY.pine on M15 XAUUSD
 // =============================================================================
 
 //@version=6
