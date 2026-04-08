@@ -256,45 +256,69 @@ plotshape(show_signals and short_sig, title="SHORT", location=location.abovebar,
      style=shape.triangledown, color=c_bear, size=size.normal)
 
 if show_signals and show_tp_sl and long_sig
-    sl_price = close - h4_atr * 1.0
-    tp_price = close + h4_atr * 2.0
-    if show_tp_sl
-        box.new(bar_index, tp_price, bar_index + zone_extend, close,
-                border_color=c_bull, bgcolor=c_bull_bg, border_width=1)
-        box.new(bar_index, close, bar_index + zone_extend, sl_price,
-                border_color=c_neutral, bgcolor=c_sl_bg, border_width=1)
+    float l_entry = close
+    float l_sl    = close - h4_atr * 1.0
+    float l_1r    = close + h4_atr * 1.0
+    float l_2r    = close + h4_atr * 2.0
+    float l_tp    = l_2r
+    int   bx      = bar_index + zone_extend
+    // Boxes
+    box.new(bar_index, l_tp,    bx, l_entry, border_color=c_bull,    bgcolor=c_bull_bg, border_width=1)
+    box.new(bar_index, l_entry, bx, l_sl,    border_color=c_neutral, bgcolor=c_sl_bg,   border_width=1)
+    // Lines
+    line.new(bar_index, l_entry, bx, l_entry, color=c_bull,                          width=2, style=line.style_solid)
+    line.new(bar_index, l_sl,    bx, l_sl,    color=color.new(#F23645, 0),            width=1, style=line.style_solid)
+    line.new(bar_index, l_1r,    bx, l_1r,    color=color.new(#089981, 55),           width=1, style=line.style_dashed)
+    line.new(bar_index, l_tp,    bx, l_tp,    color=c_bull,                          width=1, style=line.style_solid)
+    // Price labels
+    label.new(bx, l_entry, "E  " + str.tostring(l_entry, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bull,                size=size.small)
+    label.new(bx, l_sl,    "SL " + str.tostring(l_sl,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645, 0), size=size.small)
+    label.new(bx, l_1r,    "1R " + str.tostring(l_1r,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#089981,55), size=size.small)
+    label.new(bx, l_tp,    "TP " + str.tostring(l_tp,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bull,                size=size.small)
     if show_labels
-        label.new(bar_index, sl_price * 0.9997,
+        label.new(bar_index, l_sl * 0.9997,
              "▲ ALCHEMIST LONG\n" +
              "━━━━━━━━━━━━━━━━━\n" +
-             "Entry : " + str.tostring(close,    "#.00") + "\n" +
-             "SL    : " + str.tostring(sl_price, "#.00") + "\n" +
-             "TP    : " + str.tostring(tp_price, "#.00") + "\n" +
+             "Entry : " + str.tostring(l_entry, "#.00") + "\n" +
+             "SL    : " + str.tostring(l_sl,    "#.00") + "\n" +
+             "1R    : " + str.tostring(l_1r,    "#.00") + "\n" +
+             "TP    : " + str.tostring(l_tp,    "#.00") + "\n" +
              "ATR   : " + str.tostring(math.round(h4_atr, 2)) + "\n" +
-             "R:R   : 1:2\n" +
-             "Session: London",
+             "R:R   : 1:2 | Session: London",
              style=label.style_label_up,
              color=color.new(#131722, 5),
              textcolor=c_bull, size=size.normal)
 
 if show_signals and show_tp_sl and short_sig
-    sl_price = close + h4_atr * 1.0
-    tp_price = close - h4_atr * 2.0
-    if show_tp_sl
-        box.new(bar_index, close, bar_index + zone_extend, tp_price,
-                border_color=c_bear, bgcolor=c_bear_bg, border_width=1)
-        box.new(bar_index, sl_price, bar_index + zone_extend, close,
-                border_color=c_neutral, bgcolor=c_sl_bg, border_width=1)
+    float s_entry = close
+    float s_sl    = close + h4_atr * 1.0
+    float s_1r    = close - h4_atr * 1.0
+    float s_2r    = close - h4_atr * 2.0
+    float s_tp    = s_2r
+    int   bx      = bar_index + zone_extend
+    // Boxes
+    box.new(bar_index, s_entry, bx, s_tp,    border_color=c_bear,    bgcolor=c_bear_bg, border_width=1)
+    box.new(bar_index, s_sl,    bx, s_entry, border_color=c_neutral, bgcolor=c_sl_bg,   border_width=1)
+    // Lines
+    line.new(bar_index, s_entry, bx, s_entry, color=c_bear,                          width=2, style=line.style_solid)
+    line.new(bar_index, s_sl,    bx, s_sl,    color=color.new(#F23645, 0),            width=1, style=line.style_solid)
+    line.new(bar_index, s_1r,    bx, s_1r,    color=color.new(#F23645, 55),           width=1, style=line.style_dashed)
+    line.new(bar_index, s_tp,    bx, s_tp,    color=c_bear,                          width=1, style=line.style_solid)
+    // Price labels
+    label.new(bx, s_entry, "E  " + str.tostring(s_entry, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bear,                size=size.small)
+    label.new(bx, s_sl,    "SL " + str.tostring(s_sl,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645, 0), size=size.small)
+    label.new(bx, s_1r,    "1R " + str.tostring(s_1r,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645,55), size=size.small)
+    label.new(bx, s_tp,    "TP " + str.tostring(s_tp,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bear,                size=size.small)
     if show_labels
-        label.new(bar_index, sl_price * 1.0003,
+        label.new(bar_index, s_sl * 1.0003,
              "▼ ALCHEMIST SHORT\n" +
              "━━━━━━━━━━━━━━━━━\n" +
-             "Entry : " + str.tostring(close,    "#.00") + "\n" +
-             "SL    : " + str.tostring(sl_price, "#.00") + "\n" +
-             "TP    : " + str.tostring(tp_price, "#.00") + "\n" +
+             "Entry : " + str.tostring(s_entry, "#.00") + "\n" +
+             "SL    : " + str.tostring(s_sl,    "#.00") + "\n" +
+             "1R    : " + str.tostring(s_1r,    "#.00") + "\n" +
+             "TP    : " + str.tostring(s_tp,    "#.00") + "\n" +
              "ATR   : " + str.tostring(math.round(h4_atr, 2)) + "\n" +
-             "R:R   : 1:2\n" +
-             "Session: London",
+             "R:R   : 1:2 | Session: London",
              style=label.style_label_down,
              color=color.new(#131722, 5),
              textcolor=c_bear, size=size.normal)
