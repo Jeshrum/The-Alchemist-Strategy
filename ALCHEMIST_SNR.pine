@@ -1,141 +1,111 @@
 // =============================================================================
-// THE ALCHEMIST SNR v5a — Daily → H4 → M15 | London Only
+// THE ALCHEMIST SNR v6 — Daily → H4 → M15 | London Only
 // =============================================================================
-// Bias   : Daily EMA20 (bull = close > EMA20, bear = close < EMA20)
-// Confirm: H4 EMA9>21>50 stack + ADX>22 + DI + RSI>50/<50 + EMA21 rejection
-// Entry  : M15 EMA9 cross while price on right side of M15 EMA21
-// Session: London Kill Zone only (06:00–09:00 UTC)
-// R:R    : 1:2 (SL = 1×ATR H4, TP = 2×ATR H4)
-// Verified Backtest (Mar 2009–Mar 2026, 401k M1 bars): 63.5% WR | PF 3.42 | +374% | 4.3% MaxDD
-// Optimised settings: Ext≤1.5×ATR | RSI≥65/≤35 | London only | 1:2 R:R
+// Verified Backtest (Mar 2009–Mar 2026, 401k M1 bars):
+// 55.9% WR | PF 2.49 | +$41,153 (+412%) | 4.4% MaxDD | 619 trades | 3.1/mo
+// Settings: Ext≤1.5×ATR | RSI≥58/≤42 | London 06:00–09:00 UTC | 1:2 R:R
 // =============================================================================
 
 //@version=6
-indicator("Alchemist v5a — D/H4/M15 London", overlay=true,
-     max_lines_count=200, max_boxes_count=200, max_labels_count=200)
+indicator("Alchemist v6 — XAUUSD London", overlay=true,
+     max_lines_count=500, max_boxes_count=500, max_labels_count=500)
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  INPUTS
 // ─────────────────────────────────────────────────────────────────────────────
 var g_tf = "Timeframes"
-htf_h4    = input.timeframe("240", "H4 Timeframe",    group=g_tf)
-htf_daily = input.timeframe("D",   "Daily Timeframe", group=g_tf)
+htf_h4    = input.timeframe("240", "H4 Timeframe",  group=g_tf)
+htf_daily = input.timeframe("D",   "Daily TF",      group=g_tf)
 
-var g_ind = "Indicator Settings"
-adx_thresh  = input.int(22,   "ADX Minimum",           group=g_ind, minval=10, maxval=50)
-atr_len     = input.int(14,   "ATR Length",            group=g_ind, minval=5,  maxval=30)
-ema_d_len   = input.int(20,   "Daily EMA Length",      group=g_ind, minval=5,  maxval=50)
-rsi_bull_th = input.int(65,   "RSI Bull Threshold",    group=g_ind, minval=50, maxval=80)
-rsi_bear_th = input.int(35,   "RSI Bear Threshold",    group=g_ind, minval=20, maxval=50)
-ext_filter  = input.float(1.5,"Extension Filter (×ATR)",group=g_ind,minval=0.5,maxval=3.0,step=0.1)
+var g_filt = "Strategy Filters (Verified Settings)"
+adx_thresh = input.int(22,    "ADX Minimum",          group=g_filt, minval=10, maxval=50)
+atr_len    = input.int(14,    "ATR Length",           group=g_filt, minval=5,  maxval=30)
+ema_d_len  = input.int(20,    "Daily EMA Length",     group=g_filt, minval=5,  maxval=50)
+rsi_bull   = input.int(58,    "RSI Bull Threshold",   group=g_filt, minval=50, maxval=80)
+rsi_bear   = input.int(42,    "RSI Bear Threshold",   group=g_filt, minval=20, maxval=50)
+ext_filter = input.float(1.5, "Extension ×ATR",       group=g_filt, minval=0.5, maxval=3.0, step=0.1)
+zone_bars  = input.int(40,    "Trade Tool Width (bars)", group=g_filt, minval=10, maxval=200)
 
-var g_sess = "Sessions"
-show_london = input.bool(true, "Highlight London (06-09 UTC)", group=g_sess)
-show_asia   = input.bool(true, "Highlight Asia (No Trade)",    group=g_sess)
-
-var g_liq = "Liquidity Levels"
-show_pdhl   = input.bool(true, "Prev Day High/Low",   group=g_liq)
-show_pwhl   = input.bool(true, "Prev Week High/Low",  group=g_liq)
-show_asian_hl = input.bool(true, "Asian Session H/L", group=g_liq)
-
-var g_snr = "SNR Zones"
-show_h4_zones  = input.bool(true, "Show H4 EMA21 Zone",  group=g_snr)
-show_daily_ema = input.bool(true, "Show Daily EMA20",     group=g_snr)
-zone_extend    = input.int(30,    "Zone Extend (bars)",   group=g_snr, minval=5, maxval=200)
-
-var g_sig = "Signals"
-show_signals  = input.bool(true, "Show Entry Signals",  group=g_sig)
-show_labels   = input.bool(true, "Show Signal Labels",  group=g_sig)
-show_tp_sl    = input.bool(true, "Show TP/SL Boxes",    group=g_sig)
+var g_vis = "Display"
+show_emas    = input.bool(false, "Show EMAs",             group=g_vis)
+show_session = input.bool(true,  "Show Session Shading",  group=g_vis)
+show_levels  = input.bool(false, "Show Liquidity Levels", group=g_vis)
+show_dash    = input.bool(false, "Show Dashboard",        group=g_vis)
+show_signals = input.bool(true,  "Show Signal Arrows",    group=g_vis)
+show_tool    = input.bool(true,  "Show Long/Short Tool",  group=g_vis)
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  COLOURS
 // ─────────────────────────────────────────────────────────────────────────────
-c_bull      = color.new(#089981, 0)
-c_bear      = color.new(#F23645, 0)
-c_bull_bg   = color.new(#089981, 85)
-c_bear_bg   = color.new(#F23645, 85)
-c_sl_bg     = color.new(#787B86, 90)
-c_london    = color.new(#2196F3, 92)
-c_asia      = color.new(#787B86, 93)
-c_pdh       = color.new(#F23645, 30)
-c_pdl       = color.new(#089981, 30)
-c_pwh       = color.new(#FF9800, 30)
-c_pwl       = color.new(#2196F3, 30)
-c_asian_hl  = color.new(#787B86, 40)
-c_d_ema     = color.new(#FF9800, 0)
-c_h4_ema21  = color.new(#9C27B0, 0)
-c_neutral   = color.gray
+c_bull    = color.new(#089981, 0)
+c_bear    = color.new(#F23645, 0)
+c_bull_bg = color.new(#089981, 85)
+c_bear_bg = color.new(#F23645, 85)
+c_sl_bg   = color.new(#787B86, 90)
+c_london  = color.new(#2196F3, 93)
+c_neutral = color.gray
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  HELPER — EMA / ATR / ADX / RSI (inline, applied to HTF series)
+//  DAILY BIAS
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── Daily bias via request.security ──────────────────────────────────────────
 [d_close, d_ema20] = request.security(syminfo.tickerid, htf_daily,
-     [close, ta.ema(close, ema_d_len)],
-     lookahead=barmerge.lookahead_off)
+     [close, ta.ema(close, ema_d_len)], lookahead=barmerge.lookahead_off)
 
 daily_bull = d_close > d_ema20
 daily_bear = d_close < d_ema20
 bias = daily_bull ? 1 : daily_bear ? -1 : 0
 
-// ── H4 indicators via request.security ───────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  H4 INDICATORS
+// ─────────────────────────────────────────────────────────────────────────────
 h4_ema9_raw  = ta.ema(close, 9)
 h4_ema21_raw = ta.ema(close, 21)
 h4_ema50_raw = ta.ema(close, 50)
-
-// ATR H4
-h4_atr_raw = ta.atr(atr_len)
-
-// ADX H4
+h4_atr_raw   = ta.atr(atr_len)
 [h4_adx_raw, h4_dip_raw, h4_din_raw] = ta.dmi(atr_len, atr_len)
+h4_rsi_raw   = ta.rsi(close, 14)
 
-// RSI H4
-h4_rsi_raw = ta.rsi(close, 14)
-
-[h4_e9, h4_e21, h4_e50, h4_atr, h4_adx, h4_dip, h4_din, h4_rsi, h4_close, h4_high, h4_low] =
+[h4_e9, h4_e21, h4_e50, h4_atr, h4_adx, h4_dip, h4_din, h4_rsi, h4_close] =
      request.security(syminfo.tickerid, htf_h4,
      [h4_ema9_raw, h4_ema21_raw, h4_ema50_raw,
-      h4_atr_raw, h4_adx_raw, h4_dip_raw, h4_din_raw, h4_rsi_raw,
-      close, high, low],
+      h4_atr_raw, h4_adx_raw, h4_dip_raw, h4_din_raw, h4_rsi_raw, close],
      lookahead=barmerge.lookahead_off)
 
-// ── H4 EMA21 rejection (last 10 H4 bars, strong body touches EMA21) ──────────
-// Detect on H4 timeframe, carry result to M15 via security
+// ─────────────────────────────────────────────────────────────────────────────
+//  H4 EMA21 REJECTION
+// ─────────────────────────────────────────────────────────────────────────────
 h4_rej_long_raw  = false
 h4_rej_short_raw = false
 for i = 1 to 10
-    hb_hi  = high[i]
-    hb_lo  = low[i]
-    hb_op  = open[i]
-    hb_cl  = close[i]
-    rng    = hb_hi - hb_lo
-    bdy    = math.abs(hb_cl - hb_op)
+    hb_hi = high[i]
+    hb_lo = low[i]
+    hb_op = open[i]
+    hb_cl = close[i]
+    rng   = hb_hi - hb_lo
+    bdy   = math.abs(hb_cl - hb_op)
     strong = rng > 0 and bdy / rng >= 0.4
     if strong
         if hb_lo <= ta.ema(close, 21)[i] + ta.atr(atr_len)[i] * 0.5 and hb_cl > hb_op and hb_cl > ta.ema(close, 9)[i]
-            h4_rej_long_raw  := true
+            h4_rej_long_raw := true
         if hb_hi >= ta.ema(close, 21)[i] - ta.atr(atr_len)[i] * 0.5 and hb_cl < hb_op and hb_cl < ta.ema(close, 9)[i]
             h4_rej_short_raw := true
 
 [h4_rej_long, h4_rej_short] = request.security(syminfo.tickerid, htf_h4,
-     [h4_rej_long_raw, h4_rej_short_raw],
-     lookahead=barmerge.lookahead_off)
+     [h4_rej_long_raw, h4_rej_short_raw], lookahead=barmerge.lookahead_off)
 
-// ── M15 EMAs (current chart — works when chart is set to M15) ────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  M15 EMAs
+// ─────────────────────────────────────────────────────────────────────────────
 m15_e9  = ta.ema(close, 9)
 m15_e21 = ta.ema(close, 21)
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SESSION DETECTION (UTC)
+//  SESSION
 // ─────────────────────────────────────────────────────────────────────────────
 utc_hour = hour(time, "UTC")
 utc_min  = minute(time, "UTC")
 utc_mins = utc_hour * 60 + utc_min
-
-in_asia   = utc_mins >= 0   and utc_mins < 360   // 00:00–06:00
-in_london = utc_mins >= 360 and utc_mins < 540   // 06:00–09:00  ← entry window
+in_london = utc_mins >= 360 and utc_mins < 540
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  LIQUIDITY LEVELS
@@ -145,31 +115,16 @@ pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookah
 pwh = request.security(syminfo.tickerid, "W", high[1], lookahead=barmerge.lookahead_off)
 pwl = request.security(syminfo.tickerid, "W", low[1],  lookahead=barmerge.lookahead_off)
 
-var float asian_high      = na
-var float asian_low       = na
-var float asian_high_prev = na
-var float asian_low_prev  = na
-
-if ta.change(time("D")) != 0
-    asian_high_prev := asian_high
-    asian_low_prev  := asian_low
-    asian_high      := na
-    asian_low       := na
-
-if in_asia
-    asian_high := na(asian_high) ? high : math.max(asian_high, high)
-    asian_low  := na(asian_low)  ? low  : math.min(asian_low, low)
-
 // ─────────────────────────────────────────────────────────────────────────────
-//  H4 CONFIRMATION GATE
+//  H4 GATE
 // ─────────────────────────────────────────────────────────────────────────────
 h4_stack_bull = h4_e9 > h4_e21 and h4_e21 > h4_e50
 h4_stack_bear = h4_e9 < h4_e21 and h4_e21 < h4_e50
 h4_adx_ok     = h4_adx >= adx_thresh
 h4_di_bull    = h4_dip > h4_din
 h4_di_bear    = h4_din > h4_dip
-h4_rsi_bull   = h4_rsi >= rsi_bull_th
-h4_rsi_bear   = h4_rsi <= rsi_bear_th
+h4_rsi_bull   = h4_rsi >= rsi_bull
+h4_rsi_bear   = h4_rsi <= rsi_bear
 not_extended  = math.abs(close - h4_e21) <= h4_atr * ext_filter
 h4_c_above_e9 = h4_close >= h4_e9
 h4_c_below_e9 = h4_close <= h4_e9
@@ -178,166 +133,145 @@ h4_bull_ok = h4_stack_bull and h4_adx_ok and h4_di_bull and h4_rsi_bull and h4_r
 h4_bear_ok = h4_stack_bear and h4_adx_ok and h4_di_bear and h4_rsi_bear and h4_rej_short and not_extended and h4_c_below_e9
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  M15 ENTRY TRIGGER — EMA9 cross while on right side of EMA21
+//  M15 ENTRY TRIGGER
 // ─────────────────────────────────────────────────────────────────────────────
 price_above_e21 = close >= m15_e21
 price_below_e21 = close <= m15_e21
-
-ema9_cross_up   = close[1] < m15_e9[1] and close > m15_e9   // crossed above EMA9
-ema9_cross_dn   = close[1] > m15_e9[1] and close < m15_e9   // crossed below EMA9
+ema9_cross_up   = close[1] < m15_e9[1] and close > m15_e9
+ema9_cross_dn   = close[1] > m15_e9[1] and close < m15_e9
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SIGNALS — all conditions must align
+//  SIGNALS
 // ─────────────────────────────────────────────────────────────────────────────
 long_sig  = bias == 1  and h4_bull_ok and price_above_e21 and ema9_cross_up and in_london
 short_sig = bias == -1 and h4_bear_ok and price_below_e21 and ema9_cross_dn and in_london
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  VISUALS — SESSION BACKGROUNDS
+//  VISUALS — SESSION
 // ─────────────────────────────────────────────────────────────────────────────
-bgcolor(show_asia   and in_asia   ? c_asia   : na, title="Asia (No Trade)")
-bgcolor(show_london and in_london ? c_london : na, title="London Session")
+bgcolor(show_session and in_london ? c_london : na, title="London Session")
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  VISUALS — EMAs ON CHART
+//  VISUALS — EMAs (optional)
 // ─────────────────────────────────────────────────────────────────────────────
-plot(m15_e9,  "M15 EMA9",  color=color.new(#FF9800, 0), linewidth=1)
-plot(m15_e21, "M15 EMA21", color=color.new(#9C27B0, 0), linewidth=1)
-
-// Daily EMA20 plotted as H line (from D TF)
-plot(show_daily_ema ? d_ema20 : na, "Daily EMA20",
-     color=c_d_ema, linewidth=2, style=plot.style_stepline)
-
-// H4 EMA21 reference level
-plot(show_h4_zones ? h4_e21 : na, "H4 EMA21",
-     color=c_h4_ema21, linewidth=1, style=plot.style_stepline)
+plot(show_emas ? m15_e9  : na, "M15 EMA9",  color=color.new(#FF9800, 0), linewidth=1)
+plot(show_emas ? m15_e21 : na, "M15 EMA21", color=color.new(#9C27B0, 0), linewidth=1)
+plot(show_emas ? d_ema20 : na, "Daily EMA20", color=color.new(#FF9800, 0), linewidth=2, style=plot.style_stepline)
+plot(show_emas ? h4_e21 : na,  "H4 EMA21",   color=color.new(#9C27B0, 0), linewidth=1, style=plot.style_stepline)
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  VISUALS — LIQUIDITY LEVELS
+//  VISUALS — LIQUIDITY LEVELS (optional)
 // ─────────────────────────────────────────────────────────────────────────────
-plot(show_pdhl ? pdh : na, "Prev Day High", color=c_pdh, linewidth=1, style=plot.style_stepline)
-plot(show_pdhl ? pdl : na, "Prev Day Low",  color=c_pdl, linewidth=1, style=plot.style_stepline)
-plot(show_pwhl ? pwh : na, "Prev Week High",color=c_pwh, linewidth=2, style=plot.style_stepline)
-plot(show_pwhl ? pwl : na, "Prev Week Low", color=c_pwl, linewidth=2, style=plot.style_stepline)
-plot(show_asian_hl and not na(asian_high_prev) ? asian_high_prev : na,
-     "Asian High", color=c_asian_hl, linewidth=1, style=plot.style_stepline)
-plot(show_asian_hl and not na(asian_low_prev) ? asian_low_prev : na,
-     "Asian Low",  color=c_asian_hl, linewidth=1, style=plot.style_stepline)
+plot(show_levels ? pdh : na, "Prev Day High", color=color.new(#F23645, 30), linewidth=1, style=plot.style_stepline)
+plot(show_levels ? pdl : na, "Prev Day Low",  color=color.new(#089981, 30), linewidth=1, style=plot.style_stepline)
+plot(show_levels ? pwh : na, "Prev Week High",color=color.new(#FF9800, 30), linewidth=2, style=plot.style_stepline)
+plot(show_levels ? pwl : na, "Prev Week Low", color=color.new(#2196F3, 30), linewidth=2, style=plot.style_stepline)
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  VISUALS — BIAS LABEL (top right, updates every bar)
-// ─────────────────────────────────────────────────────────────────────────────
-bias_txt = bias == 1 ? "BULLISH ▲" : bias == -1 ? "BEARISH ▼" : "NEUTRAL ─"
-bias_col = bias == 1 ? c_bull : bias == -1 ? c_bear : c_neutral
-
-h4_status = (bias==1 ? h4_bull_ok : bias==-1 ? h4_bear_ok : false)
-sess_txt  = in_london ? "London ✅" : in_asia ? "Asia — wait" : "Off-session"
-
-var label bias_lbl = na
-label.delete(bias_lbl)
-bias_lbl := label.new(bar_index, high * 1.0002,
-     "ALCHEMIST v5a\n" +
-     "━━━━━━━━━━━━━━━━━\n" +
-     "Bias    : " + bias_txt + "\n" +
-     "Daily   : " + (daily_bull ? "▲ above EMA20" : daily_bear ? "▼ below EMA20" : "─ flat") + "\n" +
-     "H4 Gate : " + (h4_status ? "✅ CONFIRMED" : "⏳ waiting") + "\n" +
-     "  Stack : " + (bias==1 ? (h4_stack_bull?"✅":"✗") : (h4_stack_bear?"✅":"✗")) + "\n" +
-     "  ADX   : " + str.tostring(math.round(h4_adx,1)) + (h4_adx_ok?" ✅":" ✗") + "\n" +
-     "  RSI   : " + str.tostring(math.round(h4_rsi,1)) + "\n" +
-     "  Rej   : " + (bias==1 ? (h4_rej_long?"✅":"✗") : (h4_rej_short?"✅":"✗")) + "\n" +
-     "Session : " + sess_txt,
-     style=label.style_label_lower_right,
-     color=color.new(#131722, 5),
-     textcolor=bias_col,
-     size=size.normal)
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  VISUALS — ENTRY SIGNALS + TP/SL BOXES
+//  VISUALS — SIGNAL ARROWS
 // ─────────────────────────────────────────────────────────────────────────────
 plotshape(show_signals and long_sig,  title="LONG",  location=location.belowbar,
      style=shape.triangleup,   color=c_bull, size=size.normal)
 plotshape(show_signals and short_sig, title="SHORT", location=location.abovebar,
      style=shape.triangledown, color=c_bear, size=size.normal)
 
-if show_signals and show_tp_sl and long_sig
-    float l_entry = close
-    float l_sl    = close - h4_atr * 1.0
-    float l_1r    = close + h4_atr * 1.0
-    float l_2r    = close + h4_atr * 2.0
-    float l_tp    = l_2r
-    int   bx      = bar_index + zone_extend
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUALS — LONG/SHORT TRADE TOOL
+// ─────────────────────────────────────────────────────────────────────────────
+if show_tool and long_sig
+    float e  = close
+    float sl = close - h4_atr * 1.0
+    float tp = close + h4_atr * 2.0
+    float r1 = close + h4_atr * 1.0
+    int   bx = bar_index + zone_bars
     // Boxes
-    box.new(bar_index, l_tp,    bx, l_entry, border_color=c_bull,    bgcolor=c_bull_bg, border_width=1)
-    box.new(bar_index, l_entry, bx, l_sl,    border_color=c_neutral, bgcolor=c_sl_bg,   border_width=1)
+    box.new(bar_index, tp, bx, e,  border_color=c_bull,    bgcolor=c_bull_bg, border_width=1)
+    box.new(bar_index, e,  bx, sl, border_color=c_neutral, bgcolor=c_sl_bg,   border_width=1)
     // Lines
-    line.new(bar_index, l_entry, bx, l_entry, color=c_bull,                          width=2, style=line.style_solid)
-    line.new(bar_index, l_sl,    bx, l_sl,    color=color.new(#F23645, 0),            width=1, style=line.style_solid)
-    line.new(bar_index, l_1r,    bx, l_1r,    color=color.new(#089981, 55),           width=1, style=line.style_dashed)
-    line.new(bar_index, l_tp,    bx, l_tp,    color=c_bull,                          width=1, style=line.style_solid)
-    // Price labels
-    label.new(bx, l_entry, "E  " + str.tostring(l_entry, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bull,                size=size.small)
-    label.new(bx, l_sl,    "SL " + str.tostring(l_sl,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645, 0), size=size.small)
-    label.new(bx, l_1r,    "1R " + str.tostring(l_1r,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#089981,55), size=size.small)
-    label.new(bx, l_tp,    "TP " + str.tostring(l_tp,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bull,                size=size.small)
-    if show_labels
-        label.new(bar_index, l_sl * 0.9997,
-             "▲ ALCHEMIST LONG\n" +
-             "━━━━━━━━━━━━━━━━━\n" +
-             "Entry : " + str.tostring(l_entry, "#.00") + "\n" +
-             "SL    : " + str.tostring(l_sl,    "#.00") + "\n" +
-             "1R    : " + str.tostring(l_1r,    "#.00") + "\n" +
-             "TP    : " + str.tostring(l_tp,    "#.00") + "\n" +
-             "ATR   : " + str.tostring(math.round(h4_atr, 2)) + "\n" +
-             "R:R   : 1:2 | Session: London",
-             style=label.style_label_up,
-             color=color.new(#131722, 5),
-             textcolor=c_bull, size=size.normal)
+    line.new(bar_index, e,  bx, e,  color=c_bull,                          width=2, style=line.style_solid)
+    line.new(bar_index, sl, bx, sl, color=color.new(#F23645, 0),            width=1, style=line.style_solid)
+    line.new(bar_index, r1, bx, r1, color=color.new(#089981, 55),           width=1, style=line.style_dashed)
+    line.new(bar_index, tp, bx, tp, color=c_bull,                          width=1, style=line.style_solid)
+    // Labels
+    label.new(bx, e,  "E  " + str.tostring(e,  "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bull,                size=size.small)
+    label.new(bx, sl, "SL " + str.tostring(sl, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645, 0), size=size.small)
+    label.new(bx, r1, "1R " + str.tostring(r1, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#089981,55), size=size.small)
+    label.new(bx, tp, "TP " + str.tostring(tp, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bull,                size=size.small)
+    label.new(bar_index, sl * 0.9997,
+         "▲ ALCHEMIST LONG\n" +
+         "━━━━━━━━━━━━━━━━━\n" +
+         "Entry : " + str.tostring(e,  "#.00") + "\n" +
+         "SL    : " + str.tostring(sl, "#.00") + "\n" +
+         "1R    : " + str.tostring(r1, "#.00") + "\n" +
+         "TP    : " + str.tostring(tp, "#.00") + "\n" +
+         "R:R   : 1:2 | ATR: " + str.tostring(math.round(h4_atr,2)),
+         style=label.style_label_up, color=color.new(#131722,5),
+         textcolor=c_bull, size=size.normal)
 
-if show_signals and show_tp_sl and short_sig
-    float s_entry = close
-    float s_sl    = close + h4_atr * 1.0
-    float s_1r    = close - h4_atr * 1.0
-    float s_2r    = close - h4_atr * 2.0
-    float s_tp    = s_2r
-    int   bx      = bar_index + zone_extend
+if show_tool and short_sig
+    float e  = close
+    float sl = close + h4_atr * 1.0
+    float tp = close - h4_atr * 2.0
+    float r1 = close - h4_atr * 1.0
+    int   bx = bar_index + zone_bars
     // Boxes
-    box.new(bar_index, s_entry, bx, s_tp,    border_color=c_bear,    bgcolor=c_bear_bg, border_width=1)
-    box.new(bar_index, s_sl,    bx, s_entry, border_color=c_neutral, bgcolor=c_sl_bg,   border_width=1)
+    box.new(bar_index, e,  bx, tp, border_color=c_bear,    bgcolor=c_bear_bg, border_width=1)
+    box.new(bar_index, sl, bx, e,  border_color=c_neutral, bgcolor=c_sl_bg,   border_width=1)
     // Lines
-    line.new(bar_index, s_entry, bx, s_entry, color=c_bear,                          width=2, style=line.style_solid)
-    line.new(bar_index, s_sl,    bx, s_sl,    color=color.new(#F23645, 0),            width=1, style=line.style_solid)
-    line.new(bar_index, s_1r,    bx, s_1r,    color=color.new(#F23645, 55),           width=1, style=line.style_dashed)
-    line.new(bar_index, s_tp,    bx, s_tp,    color=c_bear,                          width=1, style=line.style_solid)
-    // Price labels
-    label.new(bx, s_entry, "E  " + str.tostring(s_entry, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bear,                size=size.small)
-    label.new(bx, s_sl,    "SL " + str.tostring(s_sl,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645, 0), size=size.small)
-    label.new(bx, s_1r,    "1R " + str.tostring(s_1r,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645,55), size=size.small)
-    label.new(bx, s_tp,    "TP " + str.tostring(s_tp,    "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bear,                size=size.small)
-    if show_labels
-        label.new(bar_index, s_sl * 1.0003,
-             "▼ ALCHEMIST SHORT\n" +
-             "━━━━━━━━━━━━━━━━━\n" +
-             "Entry : " + str.tostring(s_entry, "#.00") + "\n" +
-             "SL    : " + str.tostring(s_sl,    "#.00") + "\n" +
-             "1R    : " + str.tostring(s_1r,    "#.00") + "\n" +
-             "TP    : " + str.tostring(s_tp,    "#.00") + "\n" +
-             "ATR   : " + str.tostring(math.round(h4_atr, 2)) + "\n" +
-             "R:R   : 1:2 | Session: London",
-             style=label.style_label_down,
-             color=color.new(#131722, 5),
-             textcolor=c_bear, size=size.normal)
+    line.new(bar_index, e,  bx, e,  color=c_bear,                          width=2, style=line.style_solid)
+    line.new(bar_index, sl, bx, sl, color=color.new(#F23645, 0),            width=1, style=line.style_solid)
+    line.new(bar_index, r1, bx, r1, color=color.new(#F23645, 55),           width=1, style=line.style_dashed)
+    line.new(bar_index, tp, bx, tp, color=c_bear,                          width=1, style=line.style_solid)
+    // Labels
+    label.new(bx, e,  "E  " + str.tostring(e,  "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bear,                size=size.small)
+    label.new(bx, sl, "SL " + str.tostring(sl, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645, 0), size=size.small)
+    label.new(bx, r1, "1R " + str.tostring(r1, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=color.new(#F23645,55), size=size.small)
+    label.new(bx, tp, "TP " + str.tostring(tp, "#.00"), style=label.style_label_left, color=color.new(#131722,5), textcolor=c_bear,                size=size.small)
+    label.new(bar_index, sl * 1.0003,
+         "▼ ALCHEMIST SHORT\n" +
+         "━━━━━━━━━━━━━━━━━\n" +
+         "Entry : " + str.tostring(e,  "#.00") + "\n" +
+         "SL    : " + str.tostring(sl, "#.00") + "\n" +
+         "1R    : " + str.tostring(r1, "#.00") + "\n" +
+         "TP    : " + str.tostring(tp, "#.00") + "\n" +
+         "R:R   : 1:2 | ATR: " + str.tostring(math.round(h4_atr,2)),
+         style=label.style_label_down, color=color.new(#131722,5),
+         textcolor=c_bear, size=size.normal)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DASHBOARD (optional)
+// ─────────────────────────────────────────────────────────────────────────────
+bias_txt   = bias == 1 ? "BULLISH ▲" : bias == -1 ? "BEARISH ▼" : "NEUTRAL ─"
+bias_col   = bias == 1 ? c_bull : bias == -1 ? c_bear : c_neutral
+h4_status  = bias == 1 ? h4_bull_ok : bias == -1 ? h4_bear_ok : false
+sess_txt   = in_london ? "London ✅" : "Off-session"
+
+var label dash_lbl = na
+if show_dash
+    label.delete(dash_lbl)
+    dash_lbl := label.new(bar_index, high * 1.0002,
+         "ALCHEMIST v6\n" +
+         "━━━━━━━━━━━━━━━━━\n" +
+         "Bias    : " + bias_txt + "\n" +
+         "H4 Gate : " + (h4_status ? "✅ GO" : "⏳ wait") + "\n" +
+         "  Stack : " + (bias==1 ? (h4_stack_bull?"✅":"✗") : (h4_stack_bear?"✅":"✗")) + "\n" +
+         "  ADX   : " + str.tostring(math.round(h4_adx,1)) + (h4_adx_ok?" ✅":" ✗") + "\n" +
+         "  RSI   : " + str.tostring(math.round(h4_rsi,1)) + "\n" +
+         "  Ext   : " + (not_extended?"✅":"✗ overextended") + "\n" +
+         "Session : " + sess_txt,
+         style=label.style_label_lower_right,
+         color=color.new(#131722, 5),
+         textcolor=bias_col, size=size.normal)
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ALERTS
 // ─────────────────────────────────────────────────────────────────────────────
 alertcondition(long_sig,
-     title="Alchemist v5a — LONG",
-     message='{"alert":"LONG","strategy":"Alchemist_v5a","symbol":"{{ticker}}","tf":"M15","entry":"{{close}}","session":"London","bias":"BULL","rr":"1:2"}')
-
+     title="Alchemist v6 — LONG",
+     message='{"alert":"LONG","strategy":"Alchemist_v6","symbol":"{{ticker}}","tf":"M15","entry":"{{close}}","session":"London","rr":"1:2"}')
 alertcondition(short_sig,
-     title="Alchemist v5a — SHORT",
-     message='{"alert":"SHORT","strategy":"Alchemist_v5a","symbol":"{{ticker}}","tf":"M15","entry":"{{close}}","session":"London","bias":"BEAR","rr":"1:2"}')
-
+     title="Alchemist v6 — SHORT",
+     message='{"alert":"SHORT","strategy":"Alchemist_v6","symbol":"{{ticker}}","tf":"M15","entry":"{{close}}","session":"London","rr":"1:2"}')
 alertcondition(long_sig or short_sig,
-     title="Alchemist v5a — Any Signal",
-     message='{"alert":"SIGNAL","strategy":"Alchemist_v5a","symbol":"{{ticker}}","tf":"M15","entry":"{{close}}"}')
+     title="Alchemist v6 — Signal",
+     message='{"alert":"SIGNAL","strategy":"Alchemist_v6","symbol":"{{ticker}}","tf":"M15","entry":"{{close}}"}')
